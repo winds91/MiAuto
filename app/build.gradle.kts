@@ -92,6 +92,10 @@ android {
         setProperty("archivesBaseName", "${applicationId}_${versionName}")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         multiDexEnabled = true
+        // Dalvik (Android 4.4) 上 secondary dex 间的类引用会在类初始化阶段触发
+        // NoClassDefFoundError。multiDexKeepProguard 强制把匹配的类放进 primary dex
+        // （classes.dex），消除跨 dex 初始化依赖。
+        multiDexKeepProguard = file("multidex-config.pro")
         vectorDrawables.useSupportLibrary = true
 
         // Store available locales in BuildConfig for runtime access
@@ -269,12 +273,110 @@ androidComponents {
     }
 }
 
+// =====================================================================
+// SDK API-only jar：从 icar-sdk-stubs.jar 筛选出仅接口 + POJO 数据类，
+// 排除所有具体实现（UCarAdapter、UCarAudioManager、各种 Manager/Service 等）。
+//
+// 为什么需要：IccoaManager 的匿名内部类实现了 ICarConnectListener / IPhoneDataListener
+// 等接口。Dalvik (Android 4.4) 在加载内部类时会验证其 implements 列表，
+// 找不到接口定义就直接拒绝加载并抛 NoClassDefFoundError。compileOnly 的 stub jar 不进 APK，
+// 所以 Dalvik 在验证时看不到接口定义 → 崩溃。把接口类做成 implementation 就能解决。
+//
+// 为什么不能直接把整个 stub 当 implementation：stub 里有 UCarAdapter 等具体实现类。
+// 注入的 icar-sdk.dex 也有同名类 → Dalvik 优先用 dex 顺序里靠前的（stub 的空实现），
+// 真正的 SDK 实现永远不会被加载。所以必须只打包接口 + POJO。
+//
+// ★ 依赖注入方式的关键约束：
+//   不能用 implementation(buildSdkApiOnlyJar.flatMap { ...archiveFile }) —— IDE sync 阶段
+//   AGP 会提前查询 Provider，而 task 还没执行 → "before task has completed" 报错。
+//   改由 files() 引用具体产物路径 + 显式 dependsOn，sync 阶段只看到普通文件依赖。
+// =====================================================================
+val sdkApiJarFile = "$buildDir/libs/icar-sdk-api-only.jar"
+val buildSdkApiOnlyJar = tasks.register<Jar>("buildSdkApiOnlyJar") {
+    archiveBaseName.set("icar-sdk-api-only")
+    destinationDirectory.set(file("$buildDir/libs"))
+
+    from(zipTree(project.file("stubs/icar-sdk-stubs.jar"))) {
+        // ★ 黑名单：排除所有具体实现，只保留接口 + POJO 数据类
+        // 注意：Gradle 的 include/exclude 过滤器语义是「同时满足 include 且不匹配 exclude」
+        // —— 不能用 include 来"恢复"被 exclude 的文件。所以 share/connect 里只排除子目录/
+        // 具体实现文件，保留 WifiOwnerConfig（IccoaManager$4 实现的接口引用了这个类型）。
+        // 与根目录 _gen_sdk_api_jar.py 保持一致（后者用于预生成 jar 以便 IDE sync）
+        exclude(
+            "com/easy/**",
+            "com/share/connect/ConnectSession.class",
+            "com/share/connect/ConnectState.class",
+            "com/share/connect/Device.class",
+            "com/share/connect/IShareLinkManager.class",
+            "com/share/connect/IShareLinkManager\$*.class",
+            "com/share/connect/LinkParameters.class",
+            "com/share/connect/LinkParameters\$*.class",
+            "com/share/connect/ShareLinkObserver.class",
+            "com/share/connect/ShareLinkObserver\$*.class",
+            "com/share/connect/ShareLinkService.class",
+            "com/share/connect/ShareLinkService\$*.class",
+            "com/share/connect/ShareObservers.class",
+            "com/share/connect/ble/**",
+            "com/share/connect/channel/**",
+            "com/share/connect/security/**",
+            "com/share/connect/utils/**",
+            "com/share/connect/wifiap/**",
+            "com/share/connect/wifip2p/**",
+            "com/ucar/protocol/**",
+            "com/ucar/databus/**",
+            "com/ucar/connect/**",
+            "com/ucar/util/**",
+            "com/ucarsink/**",
+            "com/ucar/vehiclesdk/audio/**",
+            "com/ucar/vehiclesdk/camera/**",
+            "com/ucar/vehiclesdk/cast/**",
+            "com/ucar/vehiclesdk/connect/**",
+            "com/ucar/vehiclesdk/control/**",
+            "com/ucar/vehiclesdk/datacenter/**",
+            "com/ucar/vehiclesdk/player/**",
+            "com/ucar/vehiclesdk/recorder/**",
+            "com/ucar/vehiclesdk/test/**",
+            "com/ucar/vehiclesdk/util/**",
+            "com/ucar/vehiclesdk/UCarAdapter.class",
+            "com/ucar/vehiclesdk/UCarAdapter\$*.class",
+            "com/ucar/vehiclesdk/TimerManager.class",
+            "com/ucar/vehiclesdk/TimerManager\$*.class",
+            "com/ucar/vehiclesdk/MDevice.class",
+            "com/ucar/vehiclesdk/UCarSurfaceView.class",
+            "com/ucar/vehiclesdk/UCarConnectState.class",
+            "com/ucar/vehiclesdk/UCarConnectState\$*.class",
+            "com/ucar/vehiclesdk/UCarAudioManager.class",
+            "com/ucar/vehiclesdk/UCarCastManager.class",
+            "com/ucar/vehiclesdk/UCarCameraManager.class",
+            "com/ucar/vehiclesdk/UCarConfigManager.class",
+            "com/ucar/vehiclesdk/UCarWorkModeCallback.class",
+            "com/ucar/vehiclesdk/UCarWorkModeCallback\$*.class",
+        )
+    }
+}
+
+// 确保所有 Java/Kotlin 编译任务在执行前先生成 sdk-api-only jar
+afterEvaluate {
+    tasks.matching {
+        (it.name.startsWith("compile") && it.name.endsWith("JavaWithJavac")) ||
+        (it.name.startsWith("compile") && it.name.contains("Kotlin"))
+    }.configureEach {
+        dependsOn(buildSdkApiOnlyJar)
+    }
+}
+
 dependencies {
-    // ★ ICCOA CarLink 车机端 SDK（小米 CarWith）分两步引入：
-    //   编译期用 stubs/icar-sdk-stubs.jar（纯签名存根，compileOnly 不进 APK）；
-    //   运行期把 SDK dex 作为 classesN.dex 追加进 APK —— 见文件末尾 injectIccoaDex 任务。
-    //   AGP 不消费 .dex 依赖，故不能写成 implementation(files("libs/icar-sdk.dex"))。
+    // ★ ICCOA CarLink 车机端 SDK（小米 CarWith）分三步引入：
+    //   ① 编译期用 stubs/icar-sdk-stubs.jar（compileOnly，不进 APK）；
+    //   ② 运行期需要的接口/POJO 类从 stub 里筛出 → implementation（进 APK，让 Dalvik 能验证）；
+    //   ③ SDK 实现本身由 libs/icar-sdk.dex 注入（injectIccoaDex task，见文件末尾）。
+    //   Dalvik (Android 4.4) 的 verifier 要求接口定义在同一个 dex 路径上可见。compileOnly 的
+    //   stub 类不进 APK → 实现类验证时找不到接口 → NoClassDefFoundError。
     compileOnly(files("stubs/icar-sdk-stubs.jar"))
+    // 自动生成：从 stub jar 筛出仅接口 + POJO 数据类（排除所有具体实现）
+    // 用文件路径引用产物（buildSdkApiOnlyJar 会在 compile 前由 dependsOn 先生成）
+    // sync 阶段只看到普通文件依赖，不涉及任何 task → 不会触发 "before task has completed"
+    implementation(files(sdkApiJarFile))
 
     // ★ ICCOA SDK 运行期依赖：SDK 内部用 Room 维护「信任设备(Peer)」表与跨进程失效。
     //   已用 dex 解析器确认注入的 icar-sdk.dex 里 androidx/room/* 的【定义数 = 0】（只有引用），
