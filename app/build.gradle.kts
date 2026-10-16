@@ -273,24 +273,10 @@ androidComponents {
     }
 }
 
-// =====================================================================
-// SDK API-only jar：从 icar-sdk-stubs.jar 筛选出仅接口 + POJO 数据类，
-// 排除所有具体实现（UCarAdapter、UCarAudioManager、各种 Manager/Service 等）。
-//
-// 为什么需要：IccoaManager 的匿名内部类实现了 ICarConnectListener / IPhoneDataListener
-// 等接口。Dalvik (Android 4.4) 在加载内部类时会验证其 implements 列表，
-// 找不到接口定义就直接拒绝加载并抛 NoClassDefFoundError。compileOnly 的 stub jar 不进 APK，
-// 所以 Dalvik 在验证时看不到接口定义 → 崩溃。把接口类做成 implementation 就能解决。
-//
-// 为什么不能直接把整个 stub 当 implementation：stub 里有 UCarAdapter 等具体实现类。
-// 注入的 icar-sdk.dex 也有同名类 → Dalvik 优先用 dex 顺序里靠前的（stub 的空实现），
-// 真正的 SDK 实现永远不会被加载。所以必须只打包接口 + POJO。
-//
-// ★ 依赖注入方式的关键约束：
-//   不能用 implementation(buildSdkApiOnlyJar.flatMap { ...archiveFile }) —— IDE sync 阶段
-//   AGP 会提前查询 Provider，而 task 还没执行 → "before task has completed" 报错。
-//   改由 files() 引用具体产物路径 + 显式 dependsOn，sync 阶段只看到普通文件依赖。
-// =====================================================================
+// SDK API-only jar task：从 stub jar 筛选仅接口 + POJO 数据类（排除所有具体实现）。
+// 产物路径在 build.gradle.kts 顶部 sdkApiJarFile 定义。
+// Gradle 8 的隐性依赖校验要求：任何引用该产物的 task（compile / dex / collectDependencies）
+// 都必须声明 dependsOn。这里用全局 configureEach 简化处理 —— jar task 幂等，对干净构建无副作用。
 val sdkApiJarFile = "$buildDir/libs/icar-sdk-api-only.jar"
 val buildSdkApiOnlyJar = tasks.register<Jar>("buildSdkApiOnlyJar") {
     archiveBaseName.set("icar-sdk-api-only")
@@ -298,10 +284,6 @@ val buildSdkApiOnlyJar = tasks.register<Jar>("buildSdkApiOnlyJar") {
 
     from(zipTree(project.file("stubs/icar-sdk-stubs.jar"))) {
         // ★ 黑名单：排除所有具体实现，只保留接口 + POJO 数据类
-        // 注意：Gradle 的 include/exclude 过滤器语义是「同时满足 include 且不匹配 exclude」
-        // —— 不能用 include 来"恢复"被 exclude 的文件。所以 share/connect 里只排除子目录/
-        // 具体实现文件，保留 WifiOwnerConfig（IccoaManager$4 实现的接口引用了这个类型）。
-        // 与根目录 _gen_sdk_api_jar.py 保持一致（后者用于预生成 jar 以便 IDE sync）
         exclude(
             "com/easy/**",
             "com/share/connect/ConnectSession.class",
@@ -355,11 +337,17 @@ val buildSdkApiOnlyJar = tasks.register<Jar>("buildSdkApiOnlyJar") {
     }
 }
 
-// 确保所有 Java/Kotlin 编译任务在执行前先生成 sdk-api-only jar
+// Gradle 8 会校验所有 task 对 sdkApiJarFile 的隐式依赖。
+// 用 afterEvaluate 让所有配置阶段的 task（compile/dex/collectDependencies 等）声明依赖。
+// 只排除 clean/destroy 等破坏性任务，避免循环依赖。
 afterEvaluate {
-    tasks.matching {
-        (it.name.startsWith("compile") && it.name.endsWith("JavaWithJavac")) ||
-        (it.name.startsWith("compile") && it.name.contains("Kotlin"))
+    tasks.matching { t ->
+        val n = t.name
+        n != "buildSdkApiOnlyJar" &&
+        !n.startsWith("clean") &&
+        !n.startsWith("destroy") &&
+        !n.startsWith("prepare") &&
+        !n.contains("Destroyer")
     }.configureEach {
         dependsOn(buildSdkApiOnlyJar)
     }
