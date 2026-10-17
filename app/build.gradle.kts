@@ -1,5 +1,5 @@
-import org.jetbrains.kotlin.config.KotlinCompilerVersion
-import org.jetbrains.kotlin.gradle.dsl.KotlinJvmOptions
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.lang.ProcessBuilder
 import java.util.Properties
 import java.io.FileInputStream
 // 顶层 `java` 被 Gradle 扩展名遮蔽：java.util.zip / java.io 的全限定名无法解析，
@@ -68,7 +68,7 @@ android {
 
     sourceSets {
         getByName("main") {
-            assets.srcDirs("${project.layout.buildDirectory.get().asFile}/generated/assets/root")
+            assets.directories.add(project.layout.buildDirectory.dir("generated/assets/root").get().asFile.absolutePath)
         }
     }
 
@@ -89,7 +89,6 @@ android {
         targetSdk = 36
         versionCode = 2
         versionName = "0.1.1"
-        setProperty("archivesBaseName", "${applicationId}_${versionName}")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         multiDexEnabled = true
         // Dalvik (Android 4.4) 上 secondary dex 间的类引用会在类初始化阶段触发
@@ -185,7 +184,7 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
-                getDefaultProguardFile("proguard-android.txt"),
+                getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-project.txt"
             )
 
@@ -225,9 +224,9 @@ android {
         targetCompatibility = JavaVersion.VERSION_1_8
     }
 
-    kotlinOptions {
-        (this as KotlinJvmOptions).let {
-            it.jvmTarget = "1.8"
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_1_8)
         }
     }
 
@@ -277,10 +276,10 @@ androidComponents {
 // 产物路径在 build.gradle.kts 顶部 sdkApiJarFile 定义。
 // Gradle 8 的隐性依赖校验要求：任何引用该产物的 task（compile / dex / collectDependencies）
 // 都必须声明 dependsOn。这里用全局 configureEach 简化处理 —— jar task 幂等，对干净构建无副作用。
-val sdkApiJarFile = "$buildDir/libs/icar-sdk-api-only.jar"
+val sdkApiJarFile = "${layout.buildDirectory.get().asFile}/libs/icar-sdk-api-only.jar"
 val buildSdkApiOnlyJar = tasks.register<Jar>("buildSdkApiOnlyJar") {
     archiveBaseName.set("icar-sdk-api-only")
-    destinationDirectory.set(file("$buildDir/libs"))
+    destinationDirectory.set(layout.buildDirectory.dir("libs"))
 
     from(zipTree(project.file("stubs/icar-sdk-stubs.jar"))) {
         // ★ 黑名单：排除所有具体实现，只保留接口 + POJO 数据类
@@ -530,7 +529,11 @@ val injectIccoaDex = tasks.register("injectIccoaDex") {
             logger.lifecycle(">>> [${apk.name}] 已附加 $newName (${sdkDex.length()} B)")
 
             // --- 2. zipalign ---
-            exec { commandLine(iccoaZipalign.absolutePath, "-p", "-f", "4", tmpInjected.absolutePath, tmpAligned.absolutePath) }
+            val zalignExit = ProcessBuilder(
+                iccoaZipalign.absolutePath, "-p", "-f", "4",
+                tmpInjected.absolutePath, tmpAligned.absolutePath
+            ).inheritIO().start().waitFor()
+            require(zalignExit == 0) { "zipalign 失败，exit=$zalignExit" }
 
             // --- 3. 重签（release 用发布密钥，其余沿用默认 debug keystore）---
             require(iccoaApksignerJar.exists()) { "找不到 apksigner.jar：$iccoaApksignerJar" }
@@ -558,12 +561,11 @@ val injectIccoaDex = tasks.register("injectIccoaDex") {
                 null
             }
             if (signArgs != null) {
-                exec {
-                    commandLine(
-                        listOf("java", "-jar", iccoaApksignerJar.absolutePath, "sign") +
-                            signArgs + listOf("--out", apk.absolutePath, tmpAligned.absolutePath)
-                    )
-                }
+                val signExit = ProcessBuilder(
+                    listOf("java", "-jar", iccoaApksignerJar.absolutePath, "sign") +
+                        signArgs + listOf("--out", apk.absolutePath, tmpAligned.absolutePath)
+                ).inheritIO().start().waitFor()
+                require(signExit == 0) { "apksigner 失败，exit=$signExit" }
             }
             tmpInjected.delete()
             tmpAligned.delete()
