@@ -77,3 +77,9 @@
 -keep class androidx.room.** { *; }
 -keep class androidx.room.util.** { *; }
 -keep class androidx.sqlite.db.** { *; }
+
+# --- R8 auto-generated (missing_rules.txt) ---
+# A transitive dependency references kotlin.coroutines.jvm.internal.SpillingKt, which the
+# kotlin-stdlib / kotlinx-coroutines version in use does not ship. R8 flags it as a missing
+# class on release builds; it is an optional/internal coroutine class not hit at runtime.
+-dontwarn kotlin.coroutines.jvm.internal.SpillingKt
