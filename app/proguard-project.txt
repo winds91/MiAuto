@@ -47,9 +47,16 @@
 # --- ICCOA CarLink SDK (Xiaomi CarWith) ---
 # The SDK is consumed two ways: `compileOnly(app/stubs/icar-sdk-stubs.jar)` for type
 # checking, and the real `app/libs/icar-sdk.dex` appended to the APK after packaging
-# (see injectIccoaDex in app/build.gradle.kts). R8 therefore cannot see the SDK
-# implementations and reports every referenced SDK class as missing. Downgrade those
-# to warnings — the classes are present at runtime inside the injected dex.
+# (see injectIccoaDex in app/build.gradle.kts). The injected dex is NOT obfuscated, so R8
+# must keep the SDK class/member names — otherwise project code that calls the SDK
+# (IccoaManager) is rewritten against obfuscated names and dies at startup with
+# VerifyError (observed on API 19; R8 is off in debug so it never surfaces there). Keep the
+# whole SDK surface and downgrade any "missing" report to a warning — the classes are
+# present at runtime inside the injected dex.
+-keep class com.share.** { *; }
+-keep class com.easy.** { *; }
+-keep class com.ucar.** { *; }
+-keep class com.ucarsink.** { *; }
 -dontwarn com.share.**
 -dontwarn com.easy.**
 -dontwarn com.ucar.**

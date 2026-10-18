@@ -1,11 +1,11 @@
-# app/libs — runtime dependencies that are not in git
+# app/libs — runtime dependencies (ICCOA CarLink SDK)
 
 ## `icar-sdk.dex` — ICCOA CarLink protocol SDK
 
 The ICCOA CarLink protocol is the phone-side transport behind Xiaomi CarWith, OPPO Car+ 车联 and
-vivo Jovi InCar. **This file is deliberately absent from the repository.** It is a prebuilt,
-third-party, proprietary bytecode blob, so it is neither redistributed here nor covered by this
-project's AGPL-3.0 licence. `.gitignore` keeps it out (`*.dex`), and
+vivo Jovi InCar. **This file is now tracked in the repository** (`.gitignore` whitelists it via
+`!app/libs/icar-sdk.dex`) so a fresh clone builds a projection-capable APK out of the box. It is a
+third-party, proprietary bytecode blob, not covered by this project's AGPL-3.0 licence, and
 [`injectIccoaDex`](../build.gradle.kts) treats its absence as "build without CarWith support"
 rather than as an error.
 
@@ -28,11 +28,11 @@ Put a file named `icar-sdk.dex` in this directory and build normally. The expect
 the CarLink SDK dex (currently ~7.1 MB) that implements the `com.share.connect.*` service
 surface declared in `app/src/main/AndroidManifest.xml`.
 
-**CI builds without it.** A repository secret is not an option — GitHub caps Actions secrets
-at 48 KB and this dex is ~7 MB — so `.github/workflows/android-ci.yml` is a compile / R8 /
-unit-test check whose artifact has no CarWith support. Release assets are built locally with
-this file in place. On a self-hosted runner that already has the file, CI picks it up and the
-artifact is functional.
+**CI builds with it.** Because the dex is now tracked in git, `actions/checkout` delivers it to
+every runner (fork PRs included, which get no secrets but still receive the repository contents),
+so `.github/workflows/android-ci.yml` produces CarWith-capable APKs. The "Check for the ICCOA SDK
+dex" step stays as a guard: if the file were ever absent it falls back to a compile-only notice
+rather than failing the build.
 
 ### Do not move the SDK to another package
 

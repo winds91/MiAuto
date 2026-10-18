@@ -11,9 +11,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Read-only; this workflow needs no write scopes and touches no secret beyond the optional
-# SDK dex below, so it runs unchanged on pull requests opened from forks. Fork PRs get no
-# secrets, which is why the SDK-restore step is allowed to be a no-op.
+# Read-only; this workflow needs no write scopes and touches no secret, so it runs unchanged
+# on pull requests opened from forks. The ICCOA SDK dex ships in the repository (see
+# app/libs/README.md), so forks receive it via checkout like any other committed file.
 permissions:
   contents: read
 
@@ -54,13 +54,11 @@ jobs:
       - name: Check core translations
         run: python3 scripts/check_localization.py
 
-      # The CarWith / CarLink protocol SDK is a proprietary prebuilt dex and is not in git
-      # (see app/libs/README.md). It cannot be carried in a repository secret either:
-      # Actions secrets are capped at 48 KB and the dex is ~7 MB.
-      #
-      # CI is therefore a compile / R8 / test check. Without the dex, injectIccoaDex is
-      # skipped and the uploaded APK has no CarWith support — which is why the artifact is
-      # labelled accordingly rather than presented as a release candidate.
+      # The CarWith / CarLink protocol SDK is a proprietary prebuilt dex now tracked in git
+      # (see app/libs/README.md). Checkout delivers it to every runner, so the built APKs are
+      # CarWith-capable. The check below is a guard: if the file is ever absent (e.g. an old
+      # commit from before it was committed), injectIccoaDex is skipped and the upload degrades
+      # to a compile-only notice instead of failing the build.
       - name: Check for the ICCOA SDK dex
         run: |
           if [ -f app/libs/icar-sdk.dex ]; then

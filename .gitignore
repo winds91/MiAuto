@@ -4,6 +4,9 @@
 
 # Files for the Dalvik VM
 *.dex
+# ICCOA CarLink runtime SDK dex is appended to the APK at build time (injectIccoaDex in
+# app/build.gradle.kts). Track it so a fresh clone builds a projection-capable APK out of the box.
+!app/libs/icar-sdk.dex
 
 # Java class files
 *.class

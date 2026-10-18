@@ -433,12 +433,23 @@ dependencies {
 // =====================================================================
 val sdkDex = file("libs/icar-sdk.dex")
 val sdkDexBytes: ByteArray = if (sdkDex.exists()) sdkDex.readBytes() else ByteArray(0)
-val iccoaSdkHome = (System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT"))
-    ?.let { file(it) }
-    ?: file("C:/Users/Administrator/AppData/Local/Android/Sdk")
+val envSdkHome: String? = System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT")
+val lpFile: File = rootProject.file("local.properties")
+var sdkHomeFromProps: File? = null
+if (lpFile.exists()) {
+    val props: Properties = Properties()
+    val fis: FileInputStream = FileInputStream(lpFile)
+    try { props.load(fis) } finally { fis.close() }
+    val dir: String? = props.getProperty("sdk.dir")
+    if (dir != null && dir.isNotBlank()) sdkHomeFromProps = File(dir)
+}
+val iccoaSdkHome: File =
+    if (envSdkHome != null && envSdkHome.isNotBlank()) File(envSdkHome)
+    else (sdkHomeFromProps ?: File("C:/Users/Administrator/AppData/Local/Android/Sdk"))
 val iccoaBuildToolsDir = iccoaSdkHome.resolve("build-tools").listFiles()
     ?.filter { it.isDirectory }
-    ?.filter { it.resolve("zipalign").exists() && it.resolve("lib/apksigner.jar").exists() }
+    ?.filter { (it.resolve("zipalign").exists() || it.resolve("zipalign.exe").exists())
+        && it.resolve("lib/apksigner.jar").exists() }
     ?.maxByOrNull { it.name }
     ?: iccoaSdkHome.resolve("build-tools/34.0.0")
 val iccoaZipalign = iccoaBuildToolsDir.resolve("zipalign")
@@ -545,8 +556,20 @@ val injectIccoaDex = tasks.register("injectIccoaDex") {
                         "--ks-pass", "pass:" + releaseKeyProps.getProperty("storePassword"),
                         "--key-pass", "pass:" + releaseKeyProps.getProperty("keyPassword")
                     )
+                } else if (iccoaDebugKeystore.exists()) {
+                    // Without key.properties the release APK would be left unsigned — which both
+                    // drops the injected SDK (nothing is written back) and makes the APK
+                    // uninstallable. Degrade to the debug keystore so a release build stays
+                    // testable; use a real publish key via key.properties for an actual release.
+                    logger.warn(">>> 未找到 key.properties/miauto-release-key.jks，${apk.name} 降级用 debug keystore 重签（测试用，非正式发布签名）")
+                    listOf(
+                        "--ks", iccoaDebugKeystore.absolutePath,
+                        "--ks-key-alias", "androiddebugkey",
+                        "--ks-pass", "pass:android",
+                        "--key-pass", "pass:android"
+                    )
                 } else {
-                    logger.warn(">>> 未找到 key.properties/miauto-release-key.jks，${apk.name} 未重签（安装可能失败）")
+                    logger.warn(">>> 未找到 debug.keystore，${apk.name} 未重签（安装可能失败）")
                     null
                 }
             } else if (iccoaDebugKeystore.exists()) {
